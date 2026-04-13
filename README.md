@@ -1,8 +1,8 @@
 # Speech Understanding — Programming Assignment 2
 ## Code-Switched STT → Santali Voice Cloning Pipeline
 
-**Roll No:** `[YOUR_ROLL_NO]`  
-**GitHub:** `[YOUR_GITHUB_LINK]`
+**Name:** Kakarla Sai Swaroop
+**Roll No:** `M25DE1023`  
 
 ---
 
