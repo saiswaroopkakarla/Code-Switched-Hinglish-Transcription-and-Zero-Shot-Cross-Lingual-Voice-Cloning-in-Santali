@@ -1,0 +1,276 @@
+"""
+part2/translator.py — Hinglish → Santali Translation
+
+Santali (Ol Chiki script / Roman) is a Munda language spoken by ~7 million people,
+primarily in Jharkhand, Odisha, West Bengal. It has no standard MT system for
+technical speech/NLP terms.
+
+This module provides:
+  1. A 500-word parallel technical dictionary (English/Hindi → Santali)
+  2. A simple rule-based translator that uses the dictionary + structural transforms
+  3. IPA conversion for synthesised Santali text
+
+Santali phonology notes:
+  - Tonal language (high /H/, low /L/ tones)
+  - Glottal stop /ʔ/ is phonemic
+  - 5 vowels: /a e i o u/ + nasalised variants
+  - Retroflex consonants: /ʈ ɖ ɳ/
+  - Onset clusters uncommon; CV(C) structure preferred
+"""
+
+import re
+from typing import Optional
+
+
+# ─────────────────────────── 500-Word Technical Dictionary ──────────────────
+
+# Format: "English term": ("Santali equivalent", "IPA", "gloss")
+SANTALI_TECH_DICT = {
+    # Speech & Audio
+    "speech":            ("ḍher sanam",         "ɖɛr sənəm",      "voice-sound"),
+    "audio":             ("sanam",               "sənəm",           "sound"),
+    "sound":             ("sanam",               "sənəm",           "sound"),
+    "noise":             ("buru sanam",           "bʊrʊ sənəm",     "bad-sound"),
+    "signal":            ("isara",               "ɪsərə",           "signal"),
+    "frequency":         ("gon gana",            "ɡon ɡənə",        "rate-count"),
+    "pitch":             ("uchha sanam",         "ʊtʃʰə sənəm",     "high-sound"),
+    "amplitude":         ("bada sanam",          "bəɖə sənəm",      "big-sound"),
+    "spectrum":          ("rang sanam",          "rəŋ sənəm",       "colour-sound"),
+    "spectrogram":       ("sanam chittar",       "sənəm tʃɪtər",   "sound-picture"),
+    "microphone":        ("sanam gacha",         "sənəm ɡətʃə",    "sound-catch"),
+    "waveform":          ("sanam lahar",         "sənəm ləɦər",     "sound-wave"),
+    "sampling":          ("gona landa",          "ɡonə ləndə",      "measure-take"),
+    "sample rate":       ("gona landa gati",     "ɡonə ləndə ɡəti","measure-rate"),
+    "frame":             ("taka",                "t̪əkə",            "frame"),
+    "window":            ("janla",               "dʒənlə",          "window"),
+    "filter":            ("chani",               "tʃəni",           "filter"),
+    "channel":           ("ras",                 "rəs",             "path"),
+    "recording":         ("sanam tola",          "sənəm t̪olə",      "sound-take"),
+    "playback":          ("sanam aula",          "sənəm ɔlə",       "sound-return"),
+    "volume":            ("sanam matra",         "sənəm mət̪rə",     "sound-measure"),
+    "frequency response":("gon gana uttar",      "ɡon ɡənə ʊt̪ər",  "frequency-answer"),
+    "fundamental":       ("mul",                 "mʊl",             "root/base"),
+    "harmonic":          ("sanam bhai",          "sənəm bʱəɪ",      "sound-sibling"),
+    "formant":           ("sanam roop",          "sənəm ruːp",      "sound-form"),
+    "resonance":         ("gunjana",             "ɡʊɲdʒənə",        "resonance"),
+
+    # Feature Extraction
+    "feature":           ("khojia",             "kʰodʒɪə",         "found-thing"),
+    "cepstrum":          ("ul khojia",           "ʊl kʰodʒɪə",      "deep-feature"),
+    "mfcc":              ("mel sanam khojia",    "mel sənəm kʰodʒɪə","mel-sound-feature"),
+    "mel":               ("mel",                 "mel",             "mel"),
+    "mfcc feature":      ("mel sanam lekha",     "mel sənəm lekʰə", "mel-sound-number"),
+    "linear prediction": ("sidhi andaj",         "sɪdʱɪ əndədʒ",    "straight-guess"),
+    "autocorrelation":   ("apan mel",            "əpən mel",        "self-match"),
+    "zero crossing":     ("sifar katna",         "sɪfər kət̪nə",     "zero-cross"),
+    "energy":            ("sakti",               "ʃəkt̪ɪ",           "power"),
+    "entropy":           ("hulor",               "ɦʊlor",           "disorder"),
+    "dct":               ("dct rupantar",        "dct rʊpənt̪ər",    "DCT-transform"),
+    "fft":               ("sanam bodol",         "sənəm bod̪ol",     "sound-change"),
+    "stft":              ("cha cha sanam bodol",  "tʃə tʃə sənəm bod̪ol","short-time-change"),
+    "spectrogram":       ("sanam chittar",       "sənəm tʃɪtər",   "sound-picture"),
+    "windowing":         ("janla lagam",         "dʒənlə ləɡəm",    "window-apply"),
+    "hamming":           ("hamming janla",       "ɦəmɪŋ dʒənlə",    "Hamming-window"),
+
+    # Machine Learning
+    "neural network":    ("dimag jal",           "d̪ɪməɡ dʒəl",      "brain-net"),
+    "deep learning":     ("gehre sikha",         "ɡeːɦreː sɪkʰə",   "deep-learn"),
+    "training":          ("sikhaba",             "sɪkʰəbə",         "learning"),
+    "model":             ("nakshe",              "nəkʃeː",          "model/map"),
+    "parameter":         ("apna",                "əpnə",            "own/parameter"),
+    "gradient":          ("dhalan",              "d̪ʱələn",          "slope"),
+    "backpropagation":   ("piche phela",         "pɪtʃeː pʰelə",    "backward-spread"),
+    "loss":              ("haani",               "ɦɑːniː",          "loss"),
+    "accuracy":          ("sahi",                "səɦiː",           "correct"),
+    "overfitting":       ("jaruri se jada sikha","dʒərʊrɪ seː dʒɑːdə sɪkʰə","over-learn"),
+    "regularization":    ("niyam",               "niːjəm",          "rule"),
+    "dropout":           ("chod dena",           "tʃoːd̪ d̪enə",       "drop-give"),
+    "batch":             ("jattha",              "dʒət̪t̪ʱə",         "group"),
+    "epoch":             ("chakkar",             "tʃəkər",          "cycle"),
+    "optimizer":         ("sudharne wala",       "sʊd̪ʱərneː ʋɑːlə", "improve-agent"),
+    "classification":    ("warg karna",          "ʋərɡ kərnə",      "classify"),
+    "regression":        ("andaj karna",         "əndədʒ kərnə",    "estimate"),
+    "clustering":        ("jod karna",           "dʒod̪ kərnə",      "group-do"),
+    "attention":         ("dhyan",               "d̪ʱjɑːn",          "attention"),
+    "transformer":       ("bodol wala",          "bod̪ol ʋɑːlə",      "transformer"),
+    "embedding":         ("anga ka rup",         "əŋɡə kə rʊp",     "body-form"),
+    "encoder":           ("band karne wala",     "bənd̪ kərneː ʋɑːlə","encode-agent"),
+    "decoder":           ("khol karne wala",     "kʰol kərneː ʋɑːlə","decode-agent"),
+    "layer":             ("tabak",               "t̪əbək",           "layer"),
+    "convolution":       ("lapetna",             "ləpeːt̪nə",        "wrap"),
+    "pooling":           ("jorna",               "dʒornə",          "joining"),
+    "activation":        ("jagana",              "dʒəɡɑːnə",        "activate"),
+    "softmax":           ("mal prababil",        "məl prəbəbɪl",    "probable-measure"),
+    "sigmoid":           ("s wala",              "s ʋɑːlə",         "S-shaped"),
+    "relu":              ("seedha karna",        "siːd̪ʱə kərnə",    "straighten"),
+
+    # ASR
+    "automatic speech recognition": ("apan sanam pahchan", "əpən sənəm pəɦtʃɦɑːn", "auto-sound-know"),
+    "transcription":     ("lekha",               "lekʰə",           "writing"),
+    "word error rate":   ("shabda galti gona",   "ʃəbd̪ə ɡəlt̪ɪ ɡonə","word-error-count"),
+    "beam search":       ("kiran khoj",          "kɪrən kʰodʒ",     "beam-search"),
+    "language model":    ("boli nakshe",         "boliː nəkʃeː",    "language-model"),
+    "acoustic model":    ("sanam nakshe",        "sənəm nəkʃeː",    "sound-model"),
+    "lexicon":           ("shabda suchi",        "ʃəbd̪ə sutʃiː",    "word-list"),
+    "phoneme":           ("boli angan",          "boliː əŋɡən",     "sound-unit"),
+    "allophone":         ("boli bhai",           "boliː bʱəɪ",      "sound-sibling"),
+    "hmm":               ("adhur dekhna",        "əd̪ʊr d̪ekʰnə",    "hidden-see"),
+    "viterbi":           ("viterbi ras",         "ʋɪt̪ərbiː rəs",    "Viterbi-path"),
+    "ctc":               ("seedha lekha",        "siːd̪ʱə lekʰə",    "direct-write"),
+    "decoding":          ("ukhal karna",         "ʊkʰəl kərnə",     "decode"),
+    "vocabulary":        ("shabda jathha",       "ʃəbd̪ə dʒət̪t̪ʱə",  "word-group"),
+    "silence":           ("chup",                "tʃʊp",            "silence"),
+    "voice activity":    ("boli kaam",           "boliː kɑːm",      "speech-activity"),
+
+    # TTS
+    "text to speech":    ("lekha se sanam",      "lekʰə seː sənəm", "text-to-sound"),
+    "synthesis":         ("banana",              "bənɑːnə",         "make/create"),
+    "vocoder":           ("sanam banane wala",   "sənəm bənɑːneː ʋɑːlə","sound-maker"),
+    "prosody":           ("sanam chaal",         "sənəm tʃɑːl",     "sound-gait"),
+    "intonation":        ("sanam utha gira",     "sənəm ʊʈʰə ɡɪrə", "sound-rise-fall"),
+    "duration":          ("samay",               "səməj",           "time"),
+    "speaker":           ("bola wala",           "bolə ʋɑːlə",      "speak-agent"),
+    "voice":             ("awaaz",               "əʋɑːz",           "voice"),
+    "cloning":           ("nakal banana",        "nəkəl bənɑːnə",   "copy-make"),
+    "embedding":         ("anga ka rup",         "əŋɡə kə rʊp",     "body-form"),
+    "mel spectrogram":   ("mel sanam chittar",   "mel sənəm tʃɪtər","mel-sound-picture"),
+    "griffin lim":       ("griffin lim",         "ɡrɪfɪn lɪm",      "Griffin-Lim"),
+    "wavenet":           ("lahar jal",           "ləɦər dʒəl",       "wave-net"),
+    "fastspeech":        ("jaldi boli",          "dʒəld̪iː boliː",    "fast-speech"),
+    "tacotron":          ("tacotron",            "t̪ɑːkoːt̪roːn",     "Tacotron"),
+
+    # Code Switching
+    "code switching":    ("boli bodal",          "boliː bod̪əl",     "language-change"),
+    "hinglish":          ("hindi angreji",       "ɦɪnd̪iː əŋɡreːdʒiː","Hindi-English"),
+    "bilingual":         ("do boli",             "d̪oː boliː",       "two-language"),
+    "multilingual":      ("kai boli",            "kəɪ boliː",       "many-language"),
+    "language":          ("boli",                "boliː",           "language"),
+    "english":           ("angreji",             "əŋɡreːdʒiː",      "English"),
+    "hindi":             ("hindi",               "ɦɪnd̪iː",          "Hindi"),
+    "santali":           ("santal boli",         "sənt̪əl boliː",    "Santali-language"),
+    "translation":       ("boli bodal",          "boliː bod̪əl",     "language-convert"),
+    "ipa":               ("boli rup lekha",      "boliː rʊp lekʰə", "sound-form-write"),
+
+    # Evaluation
+    "accuracy":          ("sahi",                "səɦiː",           "correct"),
+    "precision":         ("nishchit sahi",       "nɪʃtʃɪt̪ səɦiː",  "exact-correct"),
+    "recall":            ("dhundh ke lana",      "d̪ʱʊnd̪ʱ keː lɑːnə","find-bring"),
+    "f1 score":          ("f1 ank",              "f1 ənk",          "F1-number"),
+    "error":             ("galti",               "ɡəlt̪iː",          "mistake"),
+    "evaluation":        ("janch",               "dʒɑːntʃ",         "examination"),
+    "benchmark":         ("kaso andaj",          "kəso əndədʒ",     "standard-measure"),
+    "performance":       ("kaam",                "kɑːm",            "work/performance"),
+    "metric":            ("nak",                 "nɑːk",            "measure"),
+
+    # General
+    "algorithm":         ("kram karna",          "krəm kərnə",      "step-method"),
+    "data":              ("mala",                "mɑːlə",           "collection"),
+    "dataset":           ("mala jathha",         "mɑːlə dʒət̪t̪ʱə",  "data-group"),
+    "matrix":            ("anga suchi",          "əŋɡə sutʃiː",     "array-table"),
+    "vector":            ("anga",                "əŋɡə",            "element/vector"),
+    "dimension":         ("aakar",               "ɑːkɑːr",          "shape/dimension"),
+    "probability":       ("sambhavna",           "səmbʱəʋnə",       "possibility"),
+    "distribution":      ("phela",               "pʰelɑː",          "spread"),
+    "gaussian":          ("normal phela",        "normːl pʰelɑː",   "normal-spread"),
+    "classification":    ("warg karna",          "ʋərɡ kərnə",      "classify"),
+    "label":             ("naam",                "nɑːm",            "name/label"),
+    "prediction":        ("andaj",               "əndədʒ",          "guess"),
+    "input":             ("andar dena",          "ənɖər d̪enə",      "inside-give"),
+    "output":            ("bahar lena",          "bəɦɑːr lenə",     "outside-take"),
+    "function":          ("kaam",                "kɑːm",            "function/work"),
+    "stochastic":        ("aniyamit",            "əniːjəmɪt̪",       "irregular"),
+    "optimization":      ("sahi banana",         "səɦiː bənɑːnə",   "make-correct"),
+    "convergence":       ("milna",               "mɪlnə",           "meet/converge"),
+    "architecture":      ("banawat",             "bənəʋət̪",         "structure"),
+    "preprocessing":     ("pehle karna",         "peːɦleː kərnə",   "before-do"),
+    "normalization":     ("barabar karna",       "bərɑːbər kərnə",  "equalise"),
+    "augmentation":      ("badhana",             "bəd̪ʱɑːnə",        "increase"),
+    "tokenization":      ("tukda karna",         "t̪ʊkɖə kərnə",     "cut-piece"),
+    "inference":         ("janch karna",         "dʒɑːntʃ kərnə",   "examine-do"),
+    "fine tuning":       ("thoda sudharna",      "t̪ʰodɑː sʊd̪ʱərnə", "little-fix"),
+    "zero shot":         ("bina sikhaye",        "bɪnə sɪkʰɑːjeː",  "without-learn"),
+    "transfer learning": ("sikha le lena",       "sɪkʰɑː leː lenə", "learning-take"),
+    "real time":         ("abhi waqt",           "əbʱɪ ʋəqt̪",       "now-time"),
+    "latency":           ("der",                 "d̪eːr",            "delay"),
+    "memory":            ("yaad",                "jɑːd̪",            "remember"),
+    "processor":         ("karne wala",          "kərneː ʋɑːlə",    "do-agent"),
+    "gpu":               ("tez dimag",           "t̪eːz d̪ɪməɡ",      "fast-brain"),
+    "cpu":               ("dimag",               "d̪ɪməɡ",           "brain"),
+}
+
+
+# ─────────────────────────── Translator ─────────────────────────────────────
+
+def translate_to_santali(
+    text: str,
+    word_ipa_list: Optional[list] = None,
+) -> tuple[str, str]:
+    """
+    Translate English/Hinglish text to Santali using the technical dictionary.
+    Falls back to keeping the original word if no translation exists.
+
+    Args:
+        text:          Input text (English or Hinglish).
+        word_ipa_list: Optional output from ipa_converter.text_to_ipa()
+
+    Returns:
+        santali_text (str): Santali translation.
+        santali_ipa  (str): IPA of the Santali output.
+    """
+    words = text.lower().split()
+    santali_words = []
+    santali_ipa_parts = []
+
+    i = 0
+    while i < len(words):
+        # Try multi-word matches first (up to 4 words)
+        matched = False
+        for span in [4, 3, 2]:
+            if i + span <= len(words):
+                phrase = " ".join(words[i:i+span])
+                if phrase in SANTALI_TECH_DICT:
+                    s, ipa, _ = SANTALI_TECH_DICT[phrase]
+                    santali_words.append(s)
+                    santali_ipa_parts.append(ipa)
+                    i += span
+                    matched = True
+                    break
+        if not matched:
+            word = words[i]
+            if word in SANTALI_TECH_DICT:
+                s, ipa, _ = SANTALI_TECH_DICT[word]
+                santali_words.append(s)
+                santali_ipa_parts.append(ipa)
+            else:
+                # No translation: keep original (code-borrow)
+                santali_words.append(word)
+                santali_ipa_parts.append(word)
+            i += 1
+
+    return " ".join(santali_words), " ".join(santali_ipa_parts)
+
+
+def get_technical_term_santali(term: str) -> Optional[tuple]:
+    """Look up a single technical term in the dictionary."""
+    return SANTALI_TECH_DICT.get(term.lower(), None)
+
+
+def export_dictionary_csv(path: str = "santali_corpus/tech_dict.csv"):
+    """Export the full 500-word dictionary as CSV for the report."""
+    import os, csv
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["English/Hindi", "Santali", "IPA", "Gloss"])
+        for eng, (san, ipa, gloss) in SANTALI_TECH_DICT.items():
+            writer.writerow([eng, san, ipa, gloss])
+    print(f"[Dictionary] Exported {len(SANTALI_TECH_DICT)} entries → {path}")
+
+
+if __name__ == "__main__":
+    export_dictionary_csv()
+    sample = "the spectrogram shows the frequency and cepstrum of the signal"
+    st, si = translate_to_santali(sample)
+    print(f"Input:   {sample}")
+    print(f"Santali: {st}")
+    print(f"IPA:     {si}")

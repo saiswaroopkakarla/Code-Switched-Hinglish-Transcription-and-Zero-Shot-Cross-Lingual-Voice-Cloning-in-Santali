@@ -1,0 +1,11 @@
+=== Adversarial Robustness Report ===
+
+Attack: FGSM (Fast Gradient Sign Method)
+Target: Misclassify Hindi -> English
+SNR Constraint: > 40 dB (inaudible)
+
+Original prediction: hi
+Adversarial prediction: hi
+Attack success: False
+Minimum ε: None
+SNR at ε: None dB
